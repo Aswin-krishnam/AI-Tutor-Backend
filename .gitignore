@@ -1,0 +1,5 @@
+# Ignore node_modules (dependency folder)
+node_modules/
+
+# Ignore uploaded podcast files
+uploads/podcasts/
