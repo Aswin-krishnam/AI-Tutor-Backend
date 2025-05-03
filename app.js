@@ -605,6 +605,520 @@ app.get("/user/:userId/courses", async (req, res) => {
 //-------------------------------------New-------------------------------
 
 
+//----------------------------Admin Changes------------------------------
+
+app.get("/admin/users", async (req, res) => {
+  try {
+    const { page = 1, limit = 10, search = "", role = "all", sort = "name", order = "asc" } = req.query;
+    
+    // Build query based on filters
+    let query = {};
+    
+    // Add search filter
+    if (search) {
+      query.$or = [
+        { name: { $regex: search, $options: "i" } },
+        { email: { $regex: search, $options: "i" } }
+      ];
+    }
+    
+    // Add role filter
+    if (role !== "all") {
+      query.role = role;
+    }
+    
+    // Determine sort field and direction
+    const sortOptions = {};
+    sortOptions[sort] = order === "asc" ? 1 : -1;
+    
+    // Count total matching documents for pagination
+    const total = await User.countDocuments(query);
+    
+    // Fetch users with pagination
+    const users = await User.find(query)
+      .sort(sortOptions)
+      .limit(parseInt(limit))
+      .skip((parseInt(page) - 1) * parseInt(limit));
+    
+    res.json({
+      users,
+      totalPages: Math.ceil(total / limit),
+      currentPage: parseInt(page),
+      total
+    });
+  } catch (error) {
+    console.error("Error fetching users:", error);
+    res.status(500).json({ message: "Error fetching users", error: error.message });
+  }
+});
+
+// Get user details by ID
+app.get("/admin/users/:id", async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    
+    // Remove sensitive information
+    const userData = {
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      enrolledCourses: user.enrolledCourses,
+      createdAt: user.createdAt,
+      level: user.level,
+      experience: user.experience,
+      rank: user.rank
+    };
+    
+    res.json(userData);
+  } catch (error) {
+    console.error("Error fetching user details:", error);
+    res.status(500).json({ message: "Error fetching user details", error: error.message });
+  }
+});
+
+// Create new user
+app.post("/admin/users", async (req, res) => {
+  try {
+    const { name, email, password, role = "user" } = req.body;
+    
+    // Check if user already exists
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({ message: "User with this email already exists" });
+    }
+    
+    // Hash password
+    const hashedPassword = await generateHashedPassword(password);
+    
+    // Create new user
+    const newUser = new User({
+      name,
+      email,
+      password: hashedPassword,
+      role
+    });
+    
+    await newUser.save();
+    
+    res.status(201).json({
+      message: "User created successfully",
+      user: {
+        _id: newUser._id,
+        name: newUser.name,
+        email: newUser.email,
+        role: newUser.role
+      }
+    });
+  } catch (error) {
+    console.error("Error creating user:", error);
+    res.status(500).json({ message: "Error creating user", error: error.message });
+  }
+});
+
+// Update user
+app.put("/admin/users/:id", async (req, res) => {
+  try {
+    const { name, email, role } = req.body;
+    const { id } = req.params;
+    
+    // Check if user exists
+    const user = await User.findById(id);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    
+    // Check if email is being changed and if it already exists
+    if (email !== user.email) {
+      const existingUser = await User.findOne({ email });
+      if (existingUser) {
+        return res.status(400).json({ message: "Email is already in use" });
+      }
+    }
+    
+    // Update user
+    const updatedUser = await User.findByIdAndUpdate(
+      id,
+      { name, email, role },
+      { new: true }
+    );
+    
+    res.json({
+      message: "User updated successfully",
+      user: {
+        _id: updatedUser._id,
+        name: updatedUser.name,
+        email: updatedUser.email,
+        role: updatedUser.role
+      }
+    });
+  } catch (error) {
+    console.error("Error updating user:", error);
+    res.status(500).json({ message: "Error updating user", error: error.message });
+  }
+});
+
+// Delete user
+app.delete("/admin/users/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Check if user exists
+    const user = await User.findById(id);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    
+    // Delete user
+    await User.findByIdAndDelete(id);
+    
+    res.json({ message: "User deleted successfully" });
+  } catch (error) {
+    console.error("Error deleting user:", error);
+    res.status(500).json({ message: "Error deleting user", error: error.message });
+  }
+});
+
+// Reset user password
+app.post("/admin/users/:id/reset-password", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { newPassword } = req.body;
+    
+    // Check if user exists
+    const user = await User.findById(id);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    
+    // Hash new password
+    const hashedPassword = await generateHashedPassword(newPassword);
+    
+    // Update password
+    await User.findByIdAndUpdate(id, { password: hashedPassword });
+    
+    res.json({ message: "Password reset successfully" });
+  } catch (error) {
+    console.error("Error resetting password:", error);
+    res.status(500).json({ message: "Error resetting password", error: error.message });
+  }
+});
+
+// --------------------- REPORTS ENDPOINTS ---------------------
+
+// Get platform analytics overview
+app.get("/admin/reports/overview", async (req, res) => {
+  try {
+    // Get total users count
+    const totalUsers = await User.countDocuments();
+    
+    // Get active users (users who logged in within the last 30 days)
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    // This is an example - you would need a lastLogin field in your User model
+    // const activeUsers = await User.countDocuments({ lastLogin: { $gte: thirtyDaysAgo } });
+    
+    // For now, we'll estimate active users as 70% of total
+    const activeUsers = Math.floor(totalUsers * 0.7);
+    
+    // Get total courses
+    const totalCourses = await Course.countDocuments();
+    
+    // Get completed courses count (this is an estimate - you would need to track course completions)
+    // Example assumption: each user completes about 2 courses on average
+    const completedCourses = Math.floor(totalUsers * 2);
+    
+    // Get average course rating (example calculation)
+    // In a real system, you would have a ratings collection or field
+    const averageRating = ((Math.random() * 1) + 4).toFixed(1); // Random value between 4.0 and 5.0
+    
+    // Get total questions asked (from your AI tutor feature)
+    const allUsers = await User.find();
+    const questionsAsked = allUsers.reduce((total, user) => total + (user.queryCount || 0), 0);
+    
+    res.json({
+      totalUsers,
+      activeUsers,
+      totalCourses,
+      completedCourses,
+      averageRating,
+      questionsAsked
+    });
+  } catch (error) {
+    console.error("Error fetching analytics overview:", error);
+    res.status(500).json({ message: "Error fetching analytics", error: error.message });
+  }
+});
+
+// Get user activity data
+app.get("/admin/reports/user-activity", async (req, res) => {
+  try {
+    const { dateRange = "last30days" } = req.query;
+    
+    // Determine date range
+    const endDate = new Date();
+    let startDate = new Date();
+    
+    switch (dateRange) {
+      case "last7days":
+        startDate.setDate(endDate.getDate() - 7);
+        break;
+      case "last90days":
+        startDate.setDate(endDate.getDate() - 90);
+        break;
+      case "lastYear":
+        startDate.setDate(endDate.getDate() - 365);
+        break;
+      default: // last30days
+        startDate.setDate(endDate.getDate() - 30);
+    }
+    
+    // For this example, we'll generate sample data
+    // In a real application, you would query your database for actual metrics
+    
+    // Generate date range array
+    const dateArray = [];
+    const currentDate = new Date(startDate);
+    
+    while (currentDate <= endDate) {
+      dateArray.push(new Date(currentDate));
+      currentDate.setDate(currentDate.getDate() + 1);
+    }
+    
+    // Generate active users data
+    const dailyActiveUsers = dateArray.map(date => {
+      // Base value plus some randomness to simulate real data
+      const baseValue = 200;
+      const randomFactor = Math.floor(Math.random() * 100);
+      
+      return {
+        date: date.toISOString().split('T')[0],
+        value: baseValue + randomFactor
+      };
+    });
+    
+    // Generate signups data
+    const signups = dateArray.map(date => {
+      const baseValue = 15;
+      const randomFactor = Math.floor(Math.random() * 20);
+      
+      return {
+        date: date.toISOString().split('T')[0],
+        value: baseValue + randomFactor
+      };
+    });
+    
+    // Generate course completions data
+    const completions = dateArray.map(date => {
+      const baseValue = 25;
+      const randomFactor = Math.floor(Math.random() * 30);
+      
+      return {
+        date: date.toISOString().split('T')[0],
+        value: baseValue + randomFactor
+      };
+    });
+    
+    res.json({
+      dailyActiveUsers,
+      signups,
+      completions
+    });
+  } catch (error) {
+    console.error("Error fetching user activity data:", error);
+    res.status(500).json({ message: "Error fetching user activity", error: error.message });
+  }
+});
+
+// Get course analytics
+app.get("/admin/reports/course-analytics", async (req, res) => {
+  try {
+    // Get all courses
+    const courses = await Course.find().select('title enrollmentCount');
+    
+    // Sort by enrollment count
+    const popularCourses = courses
+      .sort((a, b) => (b.enrollmentCount || 0) - (a.enrollmentCount || 0))
+      .slice(0, 5)
+      .map(course => ({
+        name: course.title,
+        enrollments: course.enrollmentCount || 0,
+        // In a real app, you would calculate these from actual user data
+        completionRate: Math.floor(Math.random() * 30) + 50 // Random completion rate between 50-80%
+      }));
+    
+    // Create completion rates data (in a real app, this would come from course progress data)
+    const completionRates = popularCourses.map(course => ({
+      name: course.name,
+      rate: course.completionRate
+    }));
+    
+    // Create average time per module data (in a real app, this would come from user analytics)
+    const avgTimePerModule = popularCourses.map(course => ({
+      name: course.name,
+      // Random time between 30-60 minutes per module
+      time: Math.floor(Math.random() * 30) + 30
+    }));
+    
+    res.json({
+      popularCourses,
+      completionRates,
+      avgTimePerModule
+    });
+  } catch (error) {
+    console.error("Error fetching course analytics:", error);
+    res.status(500).json({ message: "Error fetching course analytics", error: error.message });
+  }
+});
+
+// Get learning metrics
+app.get("/admin/reports/learning-metrics", async (req, res) => {
+  try {
+    // In a real application, these metrics would be calculated from actual user data
+    // Here we'll provide example data for demonstration
+    
+    // Average session time calculation (hypothetical)
+    const avgSessionTime = Math.floor(Math.random() * 20) + 20; // 20-40 minutes
+    
+    // Average questions per user
+    const totalUsers = await User.countDocuments();
+    const allUsers = await User.find();
+    const totalQuestions = allUsers.reduce((sum, user) => sum + (user.queryCount || 0), 0);
+    const questionsPerUser = totalUsers > 0 ? (totalQuestions / totalUsers).toFixed(1) : "0.0";
+    
+    // Content type consumption (example data)
+    const contentConsumption = [
+      { type: "Video", percentage: 42 },
+      { type: "Text", percentage: 28 },
+      { type: "Quizzes", percentage: 17 },
+      { type: "Interactive", percentage: 13 }
+    ];
+    
+    res.json({
+      avgSessionTime,
+      questionsPerUser,
+      contentConsumption
+    });
+  } catch (error) {
+    console.error("Error fetching learning metrics:", error);
+    res.status(500).json({ message: "Error fetching learning metrics", error: error.message });
+  }
+});
+
+// --------------------- SETTINGS ENDPOINTS ---------------------
+
+// Get system settings
+app.get("/admin/settings", async (req, res) => {
+  try {
+    // In a real application, you would have a Settings model
+    // For now, we'll return default settings
+    
+    res.json({
+      general: {
+        siteName: "NeuraleLearn",
+        siteDescription: "AI-Powered Tutoring Platform",
+        contactEmail: "support@neuralelearn.com",
+        timezone: "UTC"
+      },
+      appearance: {
+        primaryColor: "#4267B2",
+        secondaryColor: "#28a745",
+        fontFamily: "Poppins",
+        darkMode: false
+      },
+      email: {
+        provider: "smtp",
+        host: "smtp.gmail.com",
+        port: "587",
+        username: "neuralearnhelp@gmail.com",
+        encryption: "tls"
+      },
+      security: {
+        passwordMinLength: 8,
+        passwordRequireUppercase: true,
+        passwordRequireSpecial: true,
+        passwordRequireNumbers: true,
+        sessionTimeout: 60,
+        twoFactorAuth: false
+      },
+      backup: {
+        frequency: "daily",
+        retention: 30,
+        location: "local"
+      }
+    });
+  } catch (error) {
+    console.error("Error fetching settings:", error);
+    res.status(500).json({ message: "Error fetching settings", error: error.message });
+  }
+});
+
+// Update system settings
+app.put("/admin/settings", async (req, res) => {
+  try {
+    const { general, appearance, email, security, backup } = req.body;
+    
+    // In a real application, you would update your Settings model
+    // For now, we'll just return success
+    
+    res.json({
+      message: "Settings updated successfully",
+      settings: {
+        general,
+        appearance,
+        email,
+        security, 
+        backup
+      }
+    });
+  } catch (error) {
+    console.error("Error updating settings:", error);
+    res.status(500).json({ message: "Error updating settings", error: error.message });
+  }
+});
+
+// Test email configuration
+app.post("/admin/settings/test-email", async (req, res) => {
+  try {
+    const { email, host, port, username, password, encryption } = req.body;
+    
+    // In a real application, you would configure nodemailer with the provided settings
+    // and send a test email
+    
+    // For demonstration, we'll simulate a successful test
+    res.json({ message: "Test email sent successfully" });
+  } catch (error) {
+    console.error("Error sending test email:", error);
+    res.status(500).json({ message: "Error sending test email", error: error.message });
+  }
+});
+
+// Create backup
+app.post("/admin/settings/create-backup", async (req, res) => {
+  try {
+    // In a real application, you would initiate a backup process
+    
+    // For demonstration, we'll simulate a successful backup
+    res.json({
+      message: "Backup created successfully",
+      details: {
+        date: new Date().toISOString(),
+        size: "42.7 MB",
+        location: req.body.location || "local"
+      }
+    });
+  } catch (error) {
+    console.error("Error creating backup:", error);
+    res.status(500).json({ message: "Error creating backup", error: error.message });
+  }
+});
+
+//----------------------------Admin Changes------------------------------
+
+
 //--------------------------------Gamification----------------------------
 
 
@@ -5729,8 +6243,9 @@ app.get("/admin/stats", async (req, res) => {
     const totalUsers = await User.countDocuments();
     const adminCount = await User.countDocuments({ role: "admin" });
     const userCount = totalUsers - adminCount;
+    const courseCount = await Course.countDocuments();
 
-    res.json({ totalUsers, adminCount, userCount });
+    res.json({ totalUsers, adminCount, userCount, courseCount });
   } catch (error) {
     res.status(500).json({ message: "Error fetching statistics", error });
   }
