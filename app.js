@@ -34,8 +34,10 @@ app.use(cors());
 app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
+
 // ✅ Connect to MongoDB
 mongoose.connect("mongodb+srv://aswinkrishnam16:aswinkrishnam@cluster0.2iu51vz.mongodb.net/AITutorDB?retryWrites=true&w=majority&appName=Cluster0");
+// mongoose.connect("mongodb+srv://aswinkrishnam16:aswinkrishnam@cluster0.2iu51vz.mongodb.net/AITutorDB?retryWrites=true&w=majority&appName=Cluster0");
 
 // ✅ JWT Secret Key
 const jwtSecret = "blog-app";
